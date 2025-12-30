@@ -1,0 +1,114 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: lakehouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+    spec:
+      containers:
+      - name: superset
+        image: apache/superset:3.1.0
+        env:
+        - name: SUPERSET_SECRET_KEY
+          value: "superset-secret"
+        - name: ADMIN_USERNAME
+          value: "admin"
+        - name: ADMIN_FIRST_NAME
+          value: "Admin"
+        - name: ADMIN_LAST_NAME
+          value: "User"
+        - name: ADMIN_EMAIL
+          value: "admin@example.com"
+        - name: ADMIN_PASSWORD
+          value: "admin"
+        - name: SUPERSET_PORT
+          value: "8088"
+        - name: GUNICORN_CMD_ARGS
+          value: "--bind 0.0.0.0:8088 --workers 2 --timeout 120 --keep-alive 2"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        ports:
+        - containerPort: 8088
+          name: http
+        command: ["/bin/sh"]
+        args: ["/docker-entrypoint.sh"]
+        volumeMounts:
+        - name: entrypoint
+          mountPath: /docker-entrypoint.sh
+          subPath: docker-entrypoint.sh
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8088
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8088
+          initialDelaySeconds: 60
+          periodSeconds: 10
+      volumes:
+      - name: entrypoint
+        configMap:
+          name: superset-entrypoint
+          defaultMode: 0755
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-entrypoint
+  namespace: lakehouse
+data:
+  docker-entrypoint.sh: |
+    #!/bin/bash
+
+    # Install Trino connector for Superset
+    pip install trino[sqlalchemy] pyhive[trino]
+
+    # Initialize Superset database
+    superset db upgrade
+
+    # Create admin user
+    superset fab create-admin \
+        --username admin \
+        --firstname Admin \
+        --lastname User \
+        --email admin@example.com \
+        --password admin
+
+    # Initialize Superset roles and permissions
+    superset init
+
+    # Start Superset
+    superset run -h 0.0.0.0 -p 8088 --with-threads --reload --debugger
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset
+  namespace: lakehouse
+spec:
+  selector:
+    app: superset
+  type: NodePort
+  ports:
+  - name: http
+    port: 8088
+    targetPort: 8088

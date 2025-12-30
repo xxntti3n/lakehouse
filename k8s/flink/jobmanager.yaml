@@ -1,0 +1,215 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jobmanager
+  namespace: lakehouse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jobmanager
+  template:
+    metadata:
+      labels:
+        app: jobmanager
+    spec:
+      containers:
+      - name: jobmanager
+        image: flink-cdc:latest
+        imagePullPolicy: Never
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "jobmanager.rpc.address: jobmanager" > /opt/flink/conf/flink-conf.yaml
+          echo "jobmanager.rpc.port: 6123" >> /opt/flink/conf/flink-conf.yaml
+          echo "taskmanager.numberOfTaskSlots: 4" >> /opt/flink/conf/flink-conf.yaml
+          echo "jobmanager.memory.process.size: 1600m" >> /opt/flink/conf/flink-conf.yaml
+          export JOB_MANAGER_RPC_ADDRESS=jobmanager
+          exec /opt/flink/bin/jobmanager.sh start-foreground
+        env:
+        - name: JOB_MANAGER_RPC_ADDRESS
+          value: "jobmanager"
+        - name: AWS_REGION
+          value: "us-east-1"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        ports:
+        - containerPort: 8081
+          name: webui
+        - containerPort: 6123
+          name: rpc
+        volumeMounts:
+        - name: flink-jobs
+          mountPath: /opt/flink/jobs
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: flink-jobs
+        configMap:
+          name: flink-jobs
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jobmanager
+  namespace: lakehouse
+spec:
+  selector:
+    app: jobmanager
+  type: NodePort
+  ports:
+  - name: webui
+    port: 8081
+    targetPort: 8081
+  - name: rpc
+    port: 6123
+    targetPort: 6123
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-jobs
+  namespace: lakehouse
+data:
+  job.sql: |
+    CREATE CATALOG my_catalog WITH (
+      'type' = 'iceberg',
+      'catalog-type' = 'hadoop',
+      'warehouse' = 's3a://warehouse/',
+      'property-version' = '1',
+      'fs.s3a.endpoint' = 'http://minio:9000',
+      'fs.s3a.access.key' = 'minio',
+      'fs.s3a.secret.key' = 'minio123',
+      'fs.s3a.path.style.access' = 'true'
+    );
+
+    USE CATALOG my_catalog;
+
+    CREATE DATABASE IF NOT EXISTS demo;
+
+    USE demo;
+
+    CREATE TABLE IF NOT EXISTS products (
+      id INT,
+      sku STRING,
+      name STRING,
+      price DECIMAL(10, 2),
+      created_at TIMESTAMP(3),
+      PRIMARY KEY (id) NOT ENFORCED
+    ) WITH (
+      'format-version' = '2',
+      'connector' = 'iceberg',
+      'catalog-name' = 'my_catalog',
+      'catalog-database' = 'demo',
+      'catalog-table' = 'products',
+      'warehouse' = 's3a://warehouse/',
+      'property-version' = '1',
+      'fs.s3a.endpoint' = 'http://minio:9000',
+      'fs.s3a.access.key' = 'minio',
+      'fs.s3a.secret.key' = 'minio123',
+      'fs.s3a.path.style.access' = 'true'
+    );
+
+    CREATE TABLE IF NOT EXISTS sales (
+      id BIGINT,
+      product_id INT,
+      qty INT,
+      price DECIMAL(10, 2),
+      sale_ts TIMESTAMP(3),
+      PRIMARY KEY (id) NOT ENFORCED
+    ) WITH (
+      'format-version' = '2',
+      'connector' = 'iceberg',
+      'catalog-name' = 'my_catalog',
+      'catalog-database' = 'demo',
+      'catalog-table' = 'sales',
+      'warehouse' = 's3a://warehouse/',
+      'property-version' = '1',
+      'fs.s3a.endpoint' = 'http://minio:9000',
+      'fs.s3a.access.key' = 'minio',
+      'fs.s3a.secret.key' = 'minio123',
+      'fs.s3a.path.style.access' = 'true'
+    );
+
+  products_streaming.sql: |
+    CREATE TABLE products_source (
+      id INT,
+      sku STRING,
+      name STRING,
+      price DECIMAL(10, 2),
+      created_at TIMESTAMP(3),
+      op STRING METADATA FROM 'op',
+      ts_ms TIMESTAMP(3) METADATA FROM 'timestamp'
+    ) WITH (
+      'connector' = 'mysql-cdc',
+      'hostname' = 'mysql',
+      'port' = '3306',
+      'username' = 'root',
+      'password' = 'rootpw',
+      'database-name' = 'appdb',
+      'table-name' = 'products',
+      'server-time-zone' = 'UTC',
+      'scan.incremental.snapshot.enabled' = 'true',
+      'scan.incremental.snapshot.chunk.size' = '80'
+    );
+
+    INSERT INTO iceberg_catalog.demo.products
+    SELECT
+      id,
+      sku,
+      name,
+      price,
+      created_at
+    FROM products_source
+    WHERE op = 'c' OR op = 'r';
+
+  sales_streaming.sql: |
+    CREATE TABLE sales_source (
+      id BIGINT,
+      product_id INT,
+      qty INT,
+      price DECIMAL(10, 2),
+      sale_ts TIMESTAMP(3),
+      op STRING METADATA FROM 'op',
+      ts_ms TIMESTAMP(3) METADATA FROM 'timestamp'
+    ) WITH (
+      'connector' = 'mysql-cdc',
+      'hostname' = 'mysql',
+      'port' = '3306',
+      'username' = 'root',
+      'password' = 'rootpw',
+      'database-name' = 'appdb',
+      'table-name' = 'sales',
+      'server-time-zone' = 'UTC',
+      'scan.incremental.snapshot.enabled' = 'true',
+      'scan.incremental.snapshot.chunk.size' = '80'
+    );
+
+    INSERT INTO iceberg_catalog.demo.sales
+    SELECT
+      id,
+      product_id,
+      qty,
+      price,
+      sale_ts
+    FROM sales_source
+    WHERE op = 'c' OR op = 'r';
