@@ -1,0 +1,4 @@
+FROM trinodb/trino:477
+
+# Copy MySQL JDBC driver from local machine
+COPY mysql-connector-j-8.0.33.jar /usr/lib/trino/plugin/mysql/mysql-connector.jar

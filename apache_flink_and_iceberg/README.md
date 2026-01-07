@@ -98,9 +98,9 @@ docker ps
 
 ```bash
 # Submit the streaming CDC jobs
-docker exec jobmanager /opt/flink/bin/sql-client.sh -f /opt/flink/job.sql
-docker exec jobmanager /opt/flink/bin/sql-client.sh -f /opt/flink/products_streaming.sql
-docker exec jobmanager /opt/flink/bin/sql-client.sh -f /opt/flink/sales_streaming.sql
+docker exec jobmanager /opt/flink/bin/sql-client.sh -f /opt/flink/jobs/job.sql
+docker exec jobmanager /opt/flink/bin/sql-client.sh -f /opt/flink/jobs/products_streaming.sql
+docker exec jobmanager /opt/flink/bin/sql-client.sh -f /opt/flink/jobs/sales_streaming.sql
 ```
 
 ### 3. Verify Data Quality

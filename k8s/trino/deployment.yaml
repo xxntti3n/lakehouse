@@ -16,7 +16,8 @@ spec:
     spec:
       containers:
       - name: trino
-        image: trinodb/trino:477
+        image: trino-mysql:latest
+        imagePullPolicy: Never
         env:
         - name: AWS_REGION
           value: "us-east-1"
@@ -59,6 +60,11 @@ metadata:
 data:
   tpch.properties: |
     connector.name=tpch
+  mysql.properties: |
+    connector.name=mysql
+    connection-url=jdbc:mysql://mysql:3306
+    connection-user=root
+    connection-password=rootpw
 
 ---
 apiVersion: v1

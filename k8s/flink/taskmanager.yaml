@@ -5,7 +5,7 @@ metadata:
   name: taskmanager
   namespace: lakehouse
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: taskmanager
@@ -23,8 +23,8 @@ spec:
         - -c
         - |
           echo "jobmanager.rpc.address: jobmanager" > /opt/flink/conf/flink-conf.yaml
-          echo "taskmanager.numberOfTaskSlots: 4" >> /opt/flink/conf/flink-conf.yaml
-          echo "taskmanager.memory.process.size: 2048m" >> /opt/flink/conf/flink-conf.yaml
+          echo "taskmanager.numberOfTaskSlots: 2" >> /opt/flink/conf/flink-conf.yaml
+          echo "taskmanager.memory.process.size: 1024m" >> /opt/flink/conf/flink-conf.yaml
           export JOB_MANAGER_RPC_ADDRESS=jobmanager
           exec /opt/flink/bin/taskmanager.sh start-foreground
         env:
@@ -34,11 +34,11 @@ spec:
           value: "us-east-1"
         resources:
           requests:
-            memory: "1Gi"
-            cpu: "500m"
+            memory: "768Mi"
+            cpu: "250m"
           limits:
-            memory: "2Gi"
-            cpu: "1000m"
+            memory: "1536Mi"
+            cpu: "500m"
         ports:
         - containerPort: 6122
           name: rpc

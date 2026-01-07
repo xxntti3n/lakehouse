@@ -26,6 +26,7 @@ spec:
           echo "jobmanager.rpc.port: 6123" >> /opt/flink/conf/flink-conf.yaml
           echo "taskmanager.numberOfTaskSlots: 4" >> /opt/flink/conf/flink-conf.yaml
           echo "jobmanager.memory.process.size: 1600m" >> /opt/flink/conf/flink-conf.yaml
+          echo "blob.server.port: 6124" >> /opt/flink/conf/flink-conf.yaml
           export JOB_MANAGER_RPC_ADDRESS=jobmanager
           exec /opt/flink/bin/jobmanager.sh start-foreground
         env:
@@ -35,16 +36,18 @@ spec:
           value: "us-east-1"
         resources:
           requests:
-            memory: "1Gi"
-            cpu: "500m"
-          limits:
-            memory: "2Gi"
+            memory: "4Gi"
             cpu: "1000m"
+          limits:
+            memory: "6Gi"
+            cpu: "2000m"
         ports:
         - containerPort: 8081
           name: webui
         - containerPort: 6123
           name: rpc
+        - containerPort: 6124
+          name: blob
         volumeMounts:
         - name: flink-jobs
           mountPath: /opt/flink/jobs
@@ -52,14 +55,18 @@ spec:
           httpGet:
             path: /
             port: 8081
-          initialDelaySeconds: 30
-          periodSeconds: 10
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /
             port: 8081
-          initialDelaySeconds: 30
-          periodSeconds: 10
+          initialDelaySeconds: 60
+          periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 3
       volumes:
       - name: flink-jobs
         configMap:
@@ -82,6 +89,9 @@ spec:
   - name: rpc
     port: 6123
     targetPort: 6123
+  - name: blob
+    port: 6124
+    targetPort: 6124
 
 ---
 apiVersion: v1
@@ -91,21 +101,25 @@ metadata:
   namespace: lakehouse
 data:
   job.sql: |
-    CREATE CATALOG my_catalog WITH (
+    -- Step 1: Create Iceberg Catalog
+    CREATE CATALOG iceberg_catalog WITH (
       'type' = 'iceberg',
-      'catalog-type' = 'hadoop',
-      'warehouse' = 's3a://warehouse/',
-      'property-version' = '1',
-      'fs.s3a.endpoint' = 'http://minio:9000',
-      'fs.s3a.access.key' = 'minio',
-      'fs.s3a.secret.key' = 'minio123',
-      'fs.s3a.path.style.access' = 'true'
+      'catalog-impl' = 'org.apache.iceberg.jdbc.JdbcCatalog',
+      'uri' = 'jdbc:mysql://mysql:3306/iceberg_catalog',
+      'jdbc.user' = 'root',
+      'jdbc.password' = 'rootpw',
+      'warehouse' = 's3://iceberg/warehouse',
+      'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+      's3.endpoint' = 'http://minio:9000',
+      's3.path-style-access' = 'true',
+      's3.access-key-id' = 'minio',
+      's3.secret-access-key' = 'minio123',
+      'client.region' = 'us-east-1'
     );
 
-    USE CATALOG my_catalog;
-
+    -- Step 2: Create Database and Tables
+    USE CATALOG iceberg_catalog;
     CREATE DATABASE IF NOT EXISTS demo;
-
     USE demo;
 
     CREATE TABLE IF NOT EXISTS products (
@@ -115,18 +129,6 @@ data:
       price DECIMAL(10, 2),
       created_at TIMESTAMP(3),
       PRIMARY KEY (id) NOT ENFORCED
-    ) WITH (
-      'format-version' = '2',
-      'connector' = 'iceberg',
-      'catalog-name' = 'my_catalog',
-      'catalog-database' = 'demo',
-      'catalog-table' = 'products',
-      'warehouse' = 's3a://warehouse/',
-      'property-version' = '1',
-      'fs.s3a.endpoint' = 'http://minio:9000',
-      'fs.s3a.access.key' = 'minio',
-      'fs.s3a.secret.key' = 'minio123',
-      'fs.s3a.path.style.access' = 'true'
     );
 
     CREATE TABLE IF NOT EXISTS sales (
@@ -136,29 +138,20 @@ data:
       price DECIMAL(10, 2),
       sale_ts TIMESTAMP(3),
       PRIMARY KEY (id) NOT ENFORCED
-    ) WITH (
-      'format-version' = '2',
-      'connector' = 'iceberg',
-      'catalog-name' = 'my_catalog',
-      'catalog-database' = 'demo',
-      'catalog-table' = 'sales',
-      'warehouse' = 's3a://warehouse/',
-      'property-version' = '1',
-      'fs.s3a.endpoint' = 'http://minio:9000',
-      'fs.s3a.access.key' = 'minio',
-      'fs.s3a.secret.key' = 'minio123',
-      'fs.s3a.path.style.access' = 'true'
     );
 
-  products_streaming.sql: |
+    -- Step 3: Configure streaming mode
+    SET 'execution.runtime-mode' = 'streaming';
+    SET 'execution.checkpointing.interval' = '60s';
+
+    -- Step 4: Create Products CDC source table
     CREATE TABLE products_source (
       id INT,
       sku STRING,
       name STRING,
       price DECIMAL(10, 2),
       created_at TIMESTAMP(3),
-      op STRING METADATA FROM 'op',
-      ts_ms TIMESTAMP(3) METADATA FROM 'timestamp'
+      PRIMARY KEY (id) NOT ENFORCED
     ) WITH (
       'connector' = 'mysql-cdc',
       'hostname' = 'mysql',
@@ -167,30 +160,18 @@ data:
       'password' = 'rootpw',
       'database-name' = 'appdb',
       'table-name' = 'products',
-      'server-time-zone' = 'UTC',
       'scan.incremental.snapshot.enabled' = 'true',
-      'scan.incremental.snapshot.chunk.size' = '80'
+      'scan.startup.mode' = 'initial'
     );
 
-    INSERT INTO iceberg_catalog.demo.products
-    SELECT
-      id,
-      sku,
-      name,
-      price,
-      created_at
-    FROM products_source
-    WHERE op = 'c' OR op = 'r';
-
-  sales_streaming.sql: |
+    -- Step 5: Create Sales CDC source table
     CREATE TABLE sales_source (
       id BIGINT,
       product_id INT,
       qty INT,
       price DECIMAL(10, 2),
       sale_ts TIMESTAMP(3),
-      op STRING METADATA FROM 'op',
-      ts_ms TIMESTAMP(3) METADATA FROM 'timestamp'
+      PRIMARY KEY (id) NOT ENFORCED
     ) WITH (
       'connector' = 'mysql-cdc',
       'hostname' = 'mysql',
@@ -199,17 +180,72 @@ data:
       'password' = 'rootpw',
       'database-name' = 'appdb',
       'table-name' = 'sales',
-      'server-time-zone' = 'UTC',
       'scan.incremental.snapshot.enabled' = 'true',
-      'scan.incremental.snapshot.chunk.size' = '80'
+      'scan.startup.mode' = 'initial'
     );
 
-    INSERT INTO iceberg_catalog.demo.sales
-    SELECT
-      id,
-      product_id,
-      qty,
-      price,
-      sale_ts
-    FROM sales_source
-    WHERE op = 'c' OR op = 'r';
+    -- Step 6: Start Products CDC job
+    INSERT INTO products
+    SELECT id, sku, name, price, created_at FROM products_source;
+
+    -- Step 7: Start Sales CDC job
+    INSERT INTO sales
+    SELECT id, product_id, qty, price, sale_ts FROM sales_source;
+
+  products_streaming.sql: |
+    SET 'execution.runtime-mode' = 'streaming';
+    SET 'execution.checkpointing.interval' = '60s';
+
+    USE CATALOG iceberg_catalog;
+    USE demo;
+
+    CREATE TABLE products_source (
+      id INT,
+      sku STRING,
+      name STRING,
+      price DECIMAL(10, 2),
+      created_at TIMESTAMP(3),
+      PRIMARY KEY (id) NOT ENFORCED
+    ) WITH (
+      'connector' = 'mysql-cdc',
+      'hostname' = 'mysql',
+      'port' = '3306',
+      'username' = 'root',
+      'password' = 'rootpw',
+      'database-name' = 'appdb',
+      'table-name' = 'products',
+      'scan.incremental.snapshot.enabled' = 'true',
+      'scan.startup.mode' = 'initial'
+    );
+
+    INSERT INTO products
+    SELECT id, sku, name, price, created_at FROM products_source;
+
+  sales_streaming.sql: |
+    SET 'execution.runtime-mode' = 'streaming';
+    SET 'execution.checkpointing.interval' = '60s';
+
+    USE CATALOG iceberg_catalog;
+    USE demo;
+
+    CREATE TABLE sales_source (
+      id BIGINT,
+      product_id INT,
+      qty INT,
+      price DECIMAL(10, 2),
+      sale_ts TIMESTAMP(3),
+      PRIMARY KEY (id) NOT ENFORCED
+    ) WITH (
+      'connector' = 'mysql-cdc',
+      'hostname' = 'mysql',
+      'port' = '3306',
+      'username' = 'root',
+      'password' = 'rootpw',
+      'database-name' = 'appdb',
+      'table-name' = 'sales',
+      'scan.incremental.snapshot.enabled' = 'true',
+      'scan.startup.mode' = 'initial'
+    );
+
+    INSERT INTO sales
+    SELECT id, product_id, qty, price, sale_ts FROM sales_source;
