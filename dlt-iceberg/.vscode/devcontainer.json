@@ -1,0 +1,16 @@
+{
+  "name": "MinIO Container",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "minio",
+  "workspaceFolder": "/data",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml"
+      ]
+    }
+  },
+  "forwardPorts": [9000, 9001],
+  "postCreateCommand": "sh -c 'echo MinIO container ready'"
+}
