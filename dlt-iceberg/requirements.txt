@@ -1,0 +1,6 @@
+dlt[filesystem,sql_database,pyiceberg]>=1.0.0
+sqlalchemy>=2.0.18
+pymysql>=1.1.0
+urllib3>=1.26.0
+pyarrow>=14.0.0
+pyiceberg>=0.6.0

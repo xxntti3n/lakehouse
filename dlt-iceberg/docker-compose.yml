@@ -1,74 +1,62 @@
-version: '3.8'
-
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: dlt-postgres
+  # DLT Bucket Creator
+  dlt-bucket-creator:
+    image: quay.io/minio/mc:latest
+    container_name: dlt-bucket-creator
     environment:
-      POSTGRES_DB: dlt_data
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
-      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
-    ports:
-      - "5432:5432"
+      - MC_HOST_minio=http://minio:9000
+    entrypoint: ["/bin/sh","/scripts/create-dlt-bucket.sh"]
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-postgres.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d dlt_data"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - ./scripts/create-dlt-bucket.sh:/scripts/create-dlt-bucket.sh:ro
+    networks:
+      - lakehouse
 
-  minio:
-    image: minio/minio:latest
-    container_name: dlt-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
-      MINIO_DEFAULT_BUCKETS: iceberg-data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+  # DLT Pipeline Service
   dlt-pipeline:
     build:
       context: .
-      dockerfile: docker/Dockerfile.dlt-pipeline
+      dockerfile: Dockerfile
     container_name: dlt-pipeline
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: dlt_data
-      POSTGRES_USER: replication_user
-      POSTGRES_PASSWORD: replication123
-      MINIO_ENDPOINT: http://minio:9000
-      ICEBERG_BUCKET: iceberg-data
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin123
-      SLOT_NAME: dlt_replication_slot
-      PUB_NAME: dlt_publication
-      LOG_LEVEL: INFO
     depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      dlt-bucket-creator:
+        condition: service_completed_successfully
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpw
+      - MYSQL_DATABASE=appdb
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY=minio
+      - S3_SECRET_KEY=minio123
+      - S3_BUCKET=dlt-warehouse
+      - AWS_REGION=us-east-1
+      # DLT filesystem destination configuration
+      - DESTINATION__FILESYSTEM__BUCKET_URL=s3://dlt-warehouse
+      - DESTINATION__FILESYSTEM__CREDENTIALS__AWS_ACCESS_KEY_ID=minio
+      - DESTINATION__FILESYSTEM__CREDENTIALS__AWS_SECRET_ACCESS_KEY=minio123
+      - DESTINATION__FILESYSTEM__CREDENTIALS__ENDPOINT_URL=http://minio:9000
+      - DESTINATION__FILESYSTEM__CREDENTIALS__REGION_NAME=us-east-1
+      # Disable SSL for MinIO HTTP endpoint
+      - 'DESTINATION__FILESYSTEM__KWARGS={"use_ssl": false}'
+      - 'DESTINATION__FILESYSTEM__CLIENT_KWARGS={"verify": false, "endpoint_url": "http://minio:9000"}'
+      # AWS credentials (for compatibility)
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - AWS_ENDPOINT_URL=http://minio:9000
+      - AWS_S3_ALLOW_HTTP=true
+      - AWS_S3_ADDRESSING_STYLE=path
+    restart: "no"
+    networks:
+      - lakehouse
     volumes:
-      - ./pipeline:/app
-      - dlt_data:/app/data
-      - dlt_logs:/app/logs
+      - dlt-data:/app/.dlt
+
+# Use external network from flink_iceberg
+networks:
+  lakehouse:
+    external: true
+    name: flink_iceberg_default
 
 volumes:
-  postgres_data:
-  minio_data:
-  dlt_data:
-  dlt_logs:
+  dlt-data:
