@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  # MySQL Master - Source database (Server ID: 1)
+  mysql-master:
+    image: mysql:8.0
+    container_name: mysql-master
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_master_data:/var/lib/mysql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/master.cnf:/etc/mysql/conf.d/gtid.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL Replica 1 - Read-only replica (Server ID: 2)
+  mysql-replica-1:
+    image: mysql:8.0
+    container_name: mysql-replica-1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_replica1_data:/var/lib/mysql
+      - ./infrastructure/replica.cnf:/etc/mysql/conf.d/gtid.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    depends_on:
+      - mysql-master
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL Replica 2 - Read-only replica (Server ID: 3)
+  mysql-replica-2:
+    image: mysql:8.0
+    container_name: mysql-replica-2
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_replica2_data:/var/lib/mysql
+      - ./infrastructure/replica.cnf:/etc/mysql/conf.d/gtid.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    depends_on:
+      - mysql-master
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Replication setup script
+  replication-setup:
+    image: mysql:8.0
+    container_name: replication-setup
+    volumes:
+      - ./infrastructure/setup-replication.sh:/setup-replication.sh:ro
+    networks:
+      - lakehouse
+    depends_on:
+      - mysql-master
+      - mysql-replica-1
+      - mysql-replica-2
+    command: >
+      sh -c "
+      echo 'Waiting for MySQL servers to be ready...' &&
+      sleep 20 &&
+      chmod +x /setup-replication.sh &&
+      /setup-replication.sh &&
+      echo 'Replication setup completed!' &&
+      sleep 10 &&
+      exit 0
+      "
+    restart: "no"
+
+  # Keep existing services (MinIO, DLT, DuckDB UI, etc.)
+  minio:
+    image: minio/minio:latest
+    container_name: minio-storage
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_master_data:
+  mysql_replica1_data:
+  mysql_replica2_data:
+  minio_data:
+
+networks:
+  lakehouse:
+    external: true
+    name: lakehouse_default

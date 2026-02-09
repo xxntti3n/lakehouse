@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # ====================================================================
+  # MinIO - S3-compatible storage for Iceberg AND Flink checkpoints
+  # ====================================================================
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - minio-data:/data
+
+  # Create bucket for Flink checkpoints
+  mc:
+    image: quay.io/minio/mc:latest
+    container_name: mc
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh","/create-buckets.sh"]
+    volumes:
+      - ./minio/create-buckets.sh:/create-buckets.sh:ro
+
+  # ====================================================================
+  # MySQL - Source database for CDC
+  # ====================================================================
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+    command: >
+      --server-id=1 --log-bin=mysql-bin --binlog_format=ROW --binlog_row_image=FULL
+      --gtid_mode=ON --enforce_gtid_consistency=ON
+      --default_authentication_plugin=mysql_native_password
+    ports: ["3306:3306"]
+    volumes:
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mysql-data:/var/lib/mysql
+
+  # ====================================================================
+  # Flink JobManager - WITH PERSISTENT CHECKPOINT STORAGE
+  # ====================================================================
+  jobmanager:
+    image: flink:1.18
+    container_name: jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+      - AWS_REGION=us-east-1
+    command: jobmanager
+    ports: ["8081:8081"]
+    volumes:
+      # Mount Flink configuration
+      - ./flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+      # Mount SQL jobs
+      - ./jobs:/opt/flink/jobs:ro
+      # Local checkpoint storage (fallback)
+      - flink-checkpoints:/opt/flink/checkpoints
+    depends_on:
+      - mysql
+      - minio
+
+  # ====================================================================
+  # Flink TaskManager - WITH PERSISTENT CHECKPOINT STORAGE
+  # ====================================================================
+  taskmanager:
+    image: flink:1.18
+    container_name: taskmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+      - AWS_REGION=us-east-1
+    command: taskmanager
+    volumes:
+      # Mount Flink configuration
+      - ./flink-conf.yaml:/opt/flink/conf/flink-conf.yaml:ro
+      # Local checkpoint storage (fallback)
+      - flink-checkpoints:/opt/flink/checkpoints
+      # RocksDB storage directory
+      - flink-rocksdb:/opt/flink/rocksdb
+    depends_on:
+      - jobmanager
+      - mysql
+      - minio
+    deploy:
+      replicas: 2
+
+  # ====================================================================
+  # Trino - Query engine for Iceberg
+  # ====================================================================
+  trino:
+    image: trinodb/trino:477
+    container_name: trino
+    ports: ["8080:8080"]
+    volumes:
+      - ./trino/etc/catalog:/etc/trino/catalog:ro
+      - ./trino/lib/mysql-connector-j-8.4.0.jar:/usr/lib/trino/plugin/iceberg/mysql-connector-j-8.4.0.jar:ro
+
+  # ====================================================================
+  # Auto Data Inserter (every 10 seconds)
+  # ====================================================================
+  mysql-data-inserter:
+    build:
+      context: .
+      dockerfile: Dockerfile.cron
+    container_name: mysql-data-inserter
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpw
+      - DATABASE=appdb
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+# ====================================================================
+# Docker Volumes - Persistent Storage
+# ====================================================================
+volumes:
+  minio-data:
+    driver: local
+
+  mysql-data:
+    driver: local
+
+  flink-checkpoints:
+    driver: local
+    # Stores Flink checkpoints locally (if not using S3)
+
+  flink-rocksdb:
+    driver: local
+    # Stores RocksDB state files

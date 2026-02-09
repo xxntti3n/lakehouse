@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # MySQL Server 1 - Independent database
+  mysql-server-1:
+    image: mysql:8.0
+    container_name: mysql-server-1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_server1_data:/var/lib/mysql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/server1.cnf:/etc/mysql/conf.d/gtid.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL Server 2 - Independent database
+  mysql-server-2:
+    image: mysql:8.0
+    container_name: mysql-server-2
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_server2_data:/var/lib/mysql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/server2.cnf:/etc/mysql/conf.d/gtid.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL Server 3 - Independent database
+  mysql-server-3:
+    image: mysql:8.0
+    container_name: mysql-server-3
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_server3_data:/var/lib/mysql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/server3.cnf:/etc/mysql/conf.d/gtid.cnf
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Data Generator - Distributes data across 3 servers
+  data-generator:
+    image: mysql-iceberg-pipeline
+    container_name: mysql-data-generator
+    restart: unless-stopped
+    command: >
+      sh -c "
+      echo 'Starting Multi-Server Data Generator - Runs every 1 minute' &&
+      pip install pymysql -q &&
+      while true; do
+        echo '===== Generating Random Data at '$$(date)' =====' &&
+        python random_data_multi_server.py &&
+        echo 'Data generation completed. Next run in 1 minute...' &&
+        sleep 60
+      done
+      "
+    volumes:
+      - ./random_data_multi_server.py:/app/random_data_multi_server.py:ro
+    networks:
+      - lakehouse
+    depends_on:
+      - mysql-server-1
+      - mysql-server-2
+      - mysql-server-3
+
+  # MinIO - S3-compatible storage
+  minio:
+    image: minio/minio:latest
+    container_name: minio-storage
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_server1_data:
+  mysql_server2_data:
+  mysql_server3_data:
+  minio_data:
+
+networks:
+  lakehouse:
+    external: true
+    name: lakehouse_default

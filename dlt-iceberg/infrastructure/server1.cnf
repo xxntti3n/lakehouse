@@ -1,0 +1,13 @@
+[mysqld]
+# MySQL Server 1 Configuration
+server-id = 1
+
+# Enable GTID for CDC
+gtid_mode = ON
+enforce_gtid_consistency = ON
+log_bin = mysql-bin
+binlog_format = ROW
+binlog_row_image = FULL
+
+# Log configuration
+log_error = /var/log/mysql/error.log

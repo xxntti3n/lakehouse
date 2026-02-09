@@ -1,0 +1,25 @@
+[mysqld]
+# Replica Configuration
+server-id = 2  # Will be different for each replica (2 and 3)
+# Note: The actual server-id will be set via environment variable
+
+# Enable GTID for replication
+gtid_mode = ON
+enforce_gtid_consistency = ON
+log_bin = mysql-bin
+binlog_format = ROW
+binlog_row_image = FULL
+
+# Read-only mode for replicas
+read_only = ON
+super_read_only = ON
+
+# Relay log
+relay_log = relay-bin
+relay_log_recovery = ON
+
+# Skip slave errors (for testing)
+slave_skip_errors = all
+
+# Log configuration
+log_error = /var/log/mysql/error.log

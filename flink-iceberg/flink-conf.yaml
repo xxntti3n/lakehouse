@@ -1,0 +1,116 @@
+# ====================================================================
+# Apache Flink Configuration for CDC Pipeline
+# ====================================================================
+
+# ====================================================================
+# JobManager Configuration
+# ====================================================================
+jobmanager.rpc.address: jobmanager
+jobmanager.rpc.port: 6123
+jobmanager.memory.process.size: 1600m
+jobmanager.execution.failover-strategy: region
+
+# ====================================================================
+# TaskManager Configuration
+# ====================================================================
+taskmanager.memory.process.size: 1728m
+taskmanager.numberOfTaskSlots: 4
+parallelism.default: 2
+
+# ====================================================================
+# State Backend (RocksDB - Recommended for Production)
+# ====================================================================
+# Options: jobmanager, filesystem, rocksdb
+state.backend: rocksdb
+
+# RocksDB storage directory (local filesystem)
+state.backend.rocksdb.localdir: /opt/flink/rocksdb
+
+# ====================================================================
+# Checkpoint Storage (Persistent Storage)
+# ====================================================================
+
+# Option A: Store in MinIO (S3-compatible) - RECOMMENDED
+state.checkpoints.dir: s3://flink-checkpoints/checkpoints/
+state.savepoints.dir: s3://flink-checkpoints/savepoints/
+
+# Option B: Store in local filesystem (for testing)
+# state.checkpoints.dir: file:///tmp/flink-checkpoints/
+# state.savepoints.dir: file:///tmp/flink-savepoints/
+
+# Checkpointing interval (how often to create checkpoints)
+execution.checkpointing.interval: 30s
+
+# Minimum time between checkpoints
+execution.checkpointing.min-pause: 10s
+
+# Timeout for checkpoints
+execution.checkpointing.timeout: 10min
+
+# Maximum number of concurrent checkpoints
+execution.checkpointing.max-concurrent-checkpoints: 1
+
+# ====================================================================
+# S3 Configuration (for MinIO)
+# ====================================================================
+s3.endpoint: http://minio:9000
+s3.access-key: minio
+s3.secret-key: minio123
+s3.path.style.access: true
+
+# ====================================================================
+# High Availability (Optional - for production)
+# ====================================================================
+high-availability: none
+# For production, use ZooKeeper or Kubernetes HA
+
+# ====================================================================
+# Rest API & Web UI
+# ====================================================================
+rest.address: jobmanager
+rest.port: 8081
+web.tmpdir: /opt/flink/web
+
+# ====================================================================
+# CDC-Specific Settings (MySQL CDC)
+# ====================================================================
+# Snapshot mode for CDC connectors
+# Options: initial, schema_only, never
+# For MySQL CDC connector:
+# scan.incremental.snapshot.enabled: true
+# scan.incremental.snapshot.chunk.size: 8096
+
+# ====================================================================
+# Restart Strategy
+# ====================================================================
+# Automatic restart strategy with fixed delay
+restart-strategy: fixed-delay
+restart-strategy.fixed-delay.attempts: 3
+restart-strategy.fixed-delay.delay: 10s
+
+# ====================================================================
+# Network Buffers
+# ====================================================================
+# Increase for high-throughput CDC pipelines
+taskmanager.memory.network.min: 256mb
+taskmanager.memory.network.max: 256mb
+taskmanager.memory.network.fraction: 0.1
+taskmanager.memory.network.fraction.min: 0.1
+taskmanager.memory.network.fraction.max: 0.1
+
+# ====================================================================
+# Managed Memory (for RocksDB and batch operations)
+# ====================================================================
+taskmanager.memory.managed.fraction: 0.4
+taskmanager.memory.managed.size: 128mb
+
+# ====================================================================
+# JVM Options
+# ====================================================================
+env.java.opts: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+UseCGroupMemoryLimitForHeap"
+
+# ====================================================================
+# Security (Optional)
+# ====================================================================
+# ssl.enabled: false
+# security.ssl.rest.enabled: false
