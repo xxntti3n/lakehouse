@@ -7,7 +7,12 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from duckdb_query import IcebergDuckDB, get_duckdb
+try:
+    from duckdb_query import IcebergDuckDB, get_duckdb
+except ImportError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from duckdb_query import IcebergDuckDB, get_duckdb
 import os
 import subprocess
 import time
@@ -248,7 +253,10 @@ def main():
         return
 
     # Table view mode
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Table View", "🔍 Custom Query", "📜 Query History", "📋 Pipeline Logs", "📍 GTID Status"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊 Table View", "🔍 Custom Query", "📜 Query History",
+        "📋 Pipeline Logs", "📍 GTID Status", "✅ Verification"
+    ])
 
     with tab1:
         """View table data"""
@@ -294,10 +302,11 @@ def main():
         st.subheader("🔍 Custom SQL Query")
 
         # Query editor
-        default_query = "-- Enter your SQL query here\nSELECT * FROM 's3://dlt-warehouse/*' LIMIT 10"
+        bucket = os.getenv('S3_BUCKET', 'dlt-warehouse')
+        default_query = f"-- CDC events (latest state per table)\nSELECT * FROM read_json_auto('s3://{bucket}/debezium_cdc/cdc_events/*.jsonl.gz', union_by_name=true)\nWHERE _table = 'products'\nORDER BY _ts DESC LIMIT 100"
 
         if st.session_state.current_table:
-            default_query = f"SELECT * FROM read_iceberg('s3://{os.getenv('S3_BUCKET', 'dlt-warehouse')}/{st.session_state.current_table}/*') LIMIT 100"
+            default_query = f"SELECT * FROM read_json_auto('s3://{bucket}/debezium_cdc/cdc_events/*.jsonl.gz', union_by_name=true)\nWHERE _table = '{st.session_state.current_table}'\nORDER BY _ts DESC LIMIT 100"
 
         query = st.text_area("SQL Query", value=default_query, height=150)
 
@@ -432,6 +441,26 @@ def main():
             - `gtid_purged`: All GTIDs that have been purged from binlog
             - `gtid_owned`: GTIDs currently being processed by this server
             """)
+
+    with tab6:
+        """CDC data verification and consistency"""
+        st.subheader("✅ CDC Data Verification")
+
+        if st.button("🔄 Run verification", type="primary", key="run_verify"):
+            try:
+                summary = st.session_state.duckdb.get_gtid_summary()
+                if isinstance(summary, list) and len(summary) > 0:
+                    st.success("CDC events found in MinIO")
+                    df = pd.DataFrame(summary)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                elif isinstance(summary, dict) and 'error' in summary:
+                    st.error(summary['error'])
+                else:
+                    st.info("No CDC events yet. Run the pipeline at least once.")
+            except Exception as e:
+                st.error(str(e))
+
+        st.write("**Tip:** Use the DuckDB UI to query `debezium_cdc.cdc_events` and compare MySQL row counts with latest state in CDC.")
 
 
 if __name__ == "__main__":

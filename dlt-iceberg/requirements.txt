@@ -1,11 +1,19 @@
-dlt[filesystem,sql_database,pyiceberg]>=1.0.0
+# DLT with Iceberg support
+dlt[all]>=0.5.0
+
+# Database drivers
 sqlalchemy>=2.0.18
 pymysql>=1.1.0
 mysql-replication>=0.9.1
-urllib3>=1.26.0
+
+# Iceberg dependencies
+pyiceberg[s3]>=0.6.0
 pyarrow>=14.0.0
-pyiceberg>=0.6.0
-dagster>=1.7.0
-dagster-webserver>=1.7.0
-dagster-postgres>=0.23.0
-psycopg2-binary>=2.9.0
+s3fs>=2023.0.0
+
+# Query engines
+duckdb>=0.9.0
+
+# CDC and utilities
+urllib3>=1.26.0
+requests>=2.31.0
