@@ -1,0 +1,175 @@
+version: '3.8'
+
+# ====================================================================
+# StarRocks + Apache Ranger Docker Compose Stack
+# ====================================================================
+#
+# This compose file orchestrates the complete StarRocks + Ranger integration.
+#
+# NOTE: Configuration files referenced in this file are created in separate tasks:
+# - Task 5: infrastructure/starrocks/fe/fe.conf
+# - Task 6: infrastructure/starrocks/be/be.conf
+# - Task 7: infrastructure/starrocks/ranger-plugin/*
+#
+# Run ./scripts/setup-starrocks-ranger.sh after all tasks are complete.
+#
+# Services:
+# - ranger-mysql: MySQL backend for Ranger metadata (port 3307)
+# - ranger-admin: Apache Ranger Admin UI (port 6080)
+# - starrocks-fe: StarRocks Frontend (ports 9030, 8030, 9020)
+# - starrocks-be: StarRocks Backend (ports 8040, 9060)
+# - starrocks-plugin-installer: One-shot Ranger plugin installation
+#
+# ====================================================================
+
+services:
+  # ====================================================================
+  # MySQL for Ranger metadata storage
+  # ====================================================================
+  ranger-mysql:
+    image: mysql:8.0
+    container_name: ranger-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: ranger_db
+      MYSQL_USER: ranger
+      MYSQL_PASSWORD: ranger123
+    ports:
+      - "3307:3306"  # Different port to avoid conflict with existing MySQL
+    volumes:
+      - ./infrastructure/sql/ranger-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ranger-mysql-data:/var/lib/mysql
+    networks:
+      - ranger-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "ranger", "-pranger123"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ====================================================================
+  # Apache Ranger Admin
+  # ====================================================================
+  ranger-admin:
+    image: apacheranger/ranger:2.5.0
+    container_name: ranger-admin
+    environment:
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+      DB_HOST: ranger-mysql
+      DB_NAME: ranger_db
+      DB_USER: ranger
+      DB_PASSWORD: ranger123
+      RANGER_ADMIN_PASSWORD: rangerR0cks!
+    ports:
+      - "6080:6080"  # Ranger Admin UI
+    volumes:
+      - ./infrastructure/ranger/starrocks-service.json:/opt/ranger-admin/ews/webapp/WEB-INF/classes/starrocks-service.json:ro
+      - ranger-logs:/var/log/ranger
+      - ranger-policy-cache:/tmp/ranger-policy-cache
+    depends_on:
+      ranger-mysql:
+        condition: service_healthy
+    networks:
+      - ranger-network
+    command: >
+      bash -c "
+        sleep 20 &&
+        sed -i 's/jdbc:mysql:\/\/localhost:3306\/ranger/jdbc:mysql:\/\/ranger-mysql:3306\/ranger_db/g' /opt/ranger-admin/ews/webapp/WEB-INF/classes/ranger-admin-site.xml &&
+        sed -i 's/<username>root<\/username>/<username>ranger<\/username>/g' /opt/ranger-admin/ews/webapp/WEB-INF/classes/ranger-admin-site.xml &&
+        sed -i 's/<password>.*<\/password>/<password>ranger123<\/password>/g' /opt/ranger-admin/ews/webapp/WEB-INF/classes/ranger-admin-site.xml &&
+        cd /opt/ranger-admin && ./setup.sh && ./ews/ranger-admin-services.sh start &&
+        tail -f /dev/null
+      "
+
+  # ====================================================================
+  # StarRocks FE (Frontend)
+  # ====================================================================
+  starrocks-fe:
+    image: starrocks/fe-ubuntu:3.3.5
+    container_name: starrocks-fe
+    environment:
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+    ports:
+      - "9030:9030"  # FE query port (MySQL protocol)
+      - "8030:8030"  # HTTP port
+      - "9020:9020"  # Thrift port
+    volumes:
+      - ./infrastructure/starrocks/fe/fe.conf:/etc/starrocks/fe.conf:ro
+      - ./infrastructure/starrocks/ranger-plugin/ranger-svc-security.xml:/opt/starrocks/ranger-plugin/conf/ranger-svc-security.xml:ro
+      - starrocks-fe-meta:/opt/starrocks/fe/meta
+      - starrocks-fe-log:/opt/starrocks/fe/log
+    networks:
+      - ranger-network
+    command: >
+      bash -c "
+        sleep 10 &&
+        cd /opt/starrocks/fe &&
+        bin/start_fe.sh --daemon &&
+        tail -f log/fe.log
+      "
+    depends_on:
+      - ranger-admin
+
+  # ====================================================================
+  # StarRocks BE (Backend)
+  # ====================================================================
+  starrocks-be:
+    image: starrocks/be-ubuntu:3.3.5
+    container_name: starrocks-be
+    environment:
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+    ports:
+      - "8040:8040"  # BE web server port
+      - "9060:9060"  # Thrift port
+    volumes:
+      - ./infrastructure/starrocks/be/be.conf:/etc/starrocks/be.conf:ro
+      - starrocks-be-storage:/opt/starrocks/be/storage
+      - starrocks-be-log:/opt/starrocks/be/log
+    networks:
+      - ranger-network
+    command: >
+      bash -c "
+        sleep 15 &&
+        cd /opt/starrocks/be &&
+        bin/start_be.sh --daemon &&
+        tail -f log/be.log
+      "
+    depends_on:
+      - starrocks-fe
+
+  # ====================================================================
+  # Ranger StarRocks Plugin Installer
+  # ====================================================================
+  starrocks-plugin-installer:
+    image: starrocks/fe-ubuntu:3.3.5
+    container_name: starrocks-plugin-installer
+    volumes:
+      - ./infrastructure/starrocks/ranger-plugin/install.sh:/install.sh:ro
+      - starrocks-fe-plugin:/opt/starrocks/fe/ranger-plugin
+    networks:
+      - ranger-network
+    depends_on:
+      - ranger-admin
+      - starrocks-fe
+    command: >
+      bash -c "
+        echo 'Waiting for StarRocks FE to be ready...' &&
+        sleep 30 &&
+        chmod +x /install.sh &&
+        /install.sh
+      "
+    restart: "no"
+
+networks:
+  ranger-network:
+    driver: bridge
+
+volumes:
+  ranger-mysql-data:
+  ranger-logs:
+  ranger-policy-cache:
+  starrocks-fe-meta:
+  starrocks-fe-log:
+  starrocks-be-storage:
+  starrocks-be-log:
+  starrocks-fe-plugin:
