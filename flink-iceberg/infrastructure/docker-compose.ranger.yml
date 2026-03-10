@@ -1,0 +1,30 @@
+name: lakehouse
+
+networks:
+  lakehouse_network:
+    name: lakehouse_network
+    external: true
+
+services:
+  ranger-admin:
+    build:
+      context: ./ranger
+      dockerfile: Dockerfile
+    container_name: ranger-admin
+    networks:
+      - lakehouse_network
+    ports:
+      - "6080:6080"
+    environment:
+      DB_HOST: ranger-mysql
+      DB_NAME: ranger_db
+      DB_USER: ranger
+      DB_PASSWORD: ranger123
+    volumes:
+      - ./ranger/starrocks-service.json:/opt/ranger-admin/starrocks-service.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6080/login.jsp"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s

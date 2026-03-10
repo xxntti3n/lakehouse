@@ -1,6 +1,7 @@
 """
 Debezium-style CDC Connector for DLT
 Real-time Change Data Capture from MySQL with Iceberg checkpointing
+Updated for dlt 1.23.0
 """
 
 from .config import DebeziumConfig, MySQLConfig, IcebergConfig
@@ -32,4 +33,4 @@ __all__ = [
     'register_dlt_iceberg_tables_with_nessie'
 ]
 
-__version__ = '1.0.1'
+__version__ = '1.1.0'

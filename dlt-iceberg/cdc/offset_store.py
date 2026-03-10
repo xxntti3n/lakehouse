@@ -1,6 +1,7 @@
 """
 Offset Store - Stores CDC offsets in Iceberg/MinIO
 Persists GTID positions and binlog offsets
+Updated for dlt 1.23.0
 """
 
 import json
@@ -32,7 +33,7 @@ class OffsetStore:
         self.iceberg_config = iceberg_config
         self.pipeline_name = pipeline_name
 
-        # Setup DLT environment
+        # Setup DLT environment for dlt 1.23.0
         import os
         os.environ['DESTINATION__FILESYSTEM__BUCKET_URL'] = f"s3://{iceberg_config.checkpoint_bucket}"
         os.environ['DESTINATION__FILESYSTEM__CREDENTIALS__AWS_ACCESS_KEY_ID'] = iceberg_config.access_key
@@ -57,6 +58,7 @@ class OffsetStore:
                 'binlog_file': offset.get('binlog_file', ''),
                 'binlog_position': offset.get('binlog_position', 0),
                 'server_id': offset.get('server_id', 0),
+                'server_uuid': offset.get('server_uuid', ''),
                 'timestamp': datetime.now().isoformat(),
                 'snapshot_completed': offset.get('snapshot_completed', False)
             }
@@ -75,7 +77,7 @@ class OffsetStore:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to save offset: {e}")
+            logger.error(f"Failed to save offset: {e}", exc_info=True)
             return False
 
     def load_offset(self, partition: str) -> Optional[Dict]:
@@ -111,7 +113,7 @@ class OffsetStore:
 
             # Query for this partition (use fetchall to avoid pandas/numpy dependency)
             result = con.execute(f"""
-                SELECT partition, gtid_set, binlog_file, binlog_position, server_id, timestamp, snapshot_completed
+                SELECT partition, gtid_set, binlog_file, binlog_position, server_id, server_uuid, timestamp, snapshot_completed
                 FROM read_json_auto('{offset_glob}', union_by_name=true)
                 WHERE partition = '{partition}'
                 ORDER BY timestamp DESC
@@ -120,13 +122,14 @@ class OffsetStore:
 
             if result:
                 row = result[0]
-                # row: (partition, gtid_set, binlog_file, binlog_position, server_id, timestamp, snapshot_completed)
+                # row: (partition, gtid_set, binlog_file, binlog_position, server_id, server_uuid, timestamp, snapshot_completed)
                 offset = {
                     'gtid_set': row[1] or '',
                     'binlog_file': row[2] or '',
                     'binlog_position': int(row[3] or 0),
                     'server_id': int(row[4] or 0),
-                    'snapshot_completed': bool(row[6]) if len(row) > 6 and row[6] is not None else False
+                    'server_uuid': row[5] or '',
+                    'snapshot_completed': bool(row[7]) if len(row) > 7 and row[7] is not None else False
                 }
                 logger.info(f"📥 Loaded offset for partition '{partition}': GTID={offset['gtid_set']}")
                 return offset
@@ -137,7 +140,7 @@ class OffsetStore:
         except Exception as e:
             # No files yet (first run) is expected - do not log as ERROR
             err_msg = str(e).lower()
-            if "no files found" in err_msg or "could not open" in err_msg:
+            if "no files found" in err_msg or "could not open" in err_msg or "invalid input" in err_msg:
                 logger.info(f"No offset file yet for partition '{partition}', will start from current position")
             else:
                 logger.error(f"Failed to load offset: {e}")
@@ -161,6 +164,7 @@ class OffsetStore:
                 'binlog_file': '',
                 'binlog_position': 0,
                 'server_id': 0,
+                'server_uuid': '',
                 'snapshot_completed': False
             })
         except Exception as e:

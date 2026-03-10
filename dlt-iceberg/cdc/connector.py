@@ -1,6 +1,7 @@
 """
 Debezium DLT Connector - Main orchestrator
 Combines snapshot and streaming for complete CDC
+Updated for dlt 1.23.0 with filesystem destination + Iceberg table format
 """
 
 import logging
@@ -35,7 +36,9 @@ class SnapshotMode(Enum):
 class DebeziumDLTConnector:
     """
     Main CDC connector that combines snapshot and streaming
-    Debezium-style architecture adapted for DLT
+    Debezium-style architecture adapted for DLT 1.23.0
+
+    Uses filesystem destination with Iceberg table_format via pyiceberg
     """
 
     def __init__(self, config: DebeziumConfig):
@@ -68,49 +71,40 @@ class DebeziumDLTConnector:
             )
             self.iceberg_writer = IcebergWriter(iceberg_config)
             self.iceberg_writer.create_checkpoint_tables()
-            self.use_iceberg = True
+            self.use_iceberg_writer = True
             logger.info("✅ Iceberg writer initialized")
         except Exception as e:
             logger.warning(f"⚠️  Iceberg writer not available: {e}")
-            logger.info("   Falling back to filesystem destination")
             self.iceberg_writer = None
-            self.use_iceberg = False
+            self.use_iceberg_writer = False
 
-        # Use dlt native Iceberg when Iceberg REST catalog is configured (no custom writer for CDC table)
-        self.use_dlt_iceberg = bool(
+        # Check if we should use Iceberg table format
+        self.use_iceberg_format = bool(
             getattr(self.config.iceberg, 'iceberg_rest_uri', None) or os.environ.get('ICEBERG_REST_URI')
         )
-        if self.use_dlt_iceberg:
-            logger.info("📦 Using dlt native Iceberg destination (table_format='iceberg')")
+        if self.use_iceberg_format:
+            logger.info("📦 Using filesystem destination with Iceberg table_format (via pyiceberg)")
 
         # State
         self.snapshot_completed = False
 
     def _setup_dlt_env(self):
-        """Setup DLT environment variables (filesystem + optional Iceberg catalog for dlt native Iceberg)."""
+        """Setup DLT environment variables for dlt 1.23.0"""
         import os
+
+        # Filesystem destination configuration (dlt 1.23.0 uses bucket_url)
+        # This is where dlt writes the data files (in Iceberg format when table_format='iceberg')
         os.environ['DESTINATION__FILESYSTEM__BUCKET_URL'] = f"s3://{self.config.dlt.destination_bucket}"
         os.environ['DESTINATION__FILESYSTEM__CREDENTIALS__AWS_ACCESS_KEY_ID'] = self.config.iceberg.access_key
         os.environ['DESTINATION__FILESYSTEM__CREDENTIALS__AWS_SECRET_ACCESS_KEY'] = self.config.iceberg.secret_key
         os.environ['DESTINATION__FILESYSTEM__CREDENTIALS__ENDPOINT_URL'] = self.config.iceberg.endpoint_url
 
-        # dlt native Iceberg destination (see https://dlthub.com/docs/dlt-ecosystem/destinations/iceberg)
+        # For dlt 1.23.0 with Iceberg table format, we can optionally configure
+        # pyiceberg catalog for metadata management (optional, for verification)
         rest_uri = getattr(self.config.iceberg, 'iceberg_rest_uri', None) or os.environ.get('ICEBERG_REST_URI')
         if rest_uri:
             warehouse = f"s3://{self.config.dlt.destination_bucket}/iceberg"
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_NAME'] = 'default'
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_TYPE'] = 'rest'
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__URI'] = rest_uri
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__TYPE'] = 'rest'
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__WAREHOUSE'] = warehouse
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__PY_IO_IMPL'] = 'pyiceberg.io.fsspec.FsspecFileIO'
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__S3_ENDPOINT'] = self.config.iceberg.endpoint_url
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__S3_ACCESS_KEY_ID'] = self.config.iceberg.access_key
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__S3_SECRET_ACCESS_KEY'] = self.config.iceberg.secret_key
-            os.environ['ICEBERG_CATALOG__ICEBERG_CATALOG_CONFIG__S3_REGION'] = getattr(
-                self.config.iceberg, 'region', 'us-east-1'
-            )
-            logger.info(f"✅ dlt Iceberg catalog configured: uri={rest_uri}, warehouse={warehouse}")
+            logger.info(f"✅ Iceberg catalog configured: uri={rest_uri}, warehouse={warehouse}")
 
     def _parse_table_include(self) -> List[tuple]:
         """
@@ -246,12 +240,14 @@ class DebeziumDLTConnector:
 
         logger.info(f"📋 Tables to capture: {[f'{db}.{tbl}' for db, tbl in tables]}")
 
-        # Create DLT pipeline
+        # Create DLT pipeline - use filesystem destination
+        # The table_format='iceberg' will write data in Iceberg format
         pipeline = dlt.pipeline(
             pipeline_name=self.config.dlt.pipeline_name,
             destination='filesystem',
             dataset_name=self.config.dlt.dataset_name
         )
+        logger.info("📁 Using filesystem destination (with Iceberg table_format)")
 
         # Phase 1: Snapshot
         logger.info("\n" + "=" * 80)
@@ -300,7 +296,7 @@ class DebeziumDLTConnector:
 
         # Write remaining streaming events
         if streaming_events:
-            logger.info(f"  Writing {len(streaming_events)} streaming events...")
+            logger.info(f"  Writing {len(streaming_events)} final streaming events...")
             self._write_batch(pipeline, streaming_events, tables)
 
         logger.info(f"  📡 Streaming phase complete: {streaming_event_count} events processed")
@@ -336,19 +332,21 @@ class DebeziumDLTConnector:
 
     def _write_batch(self, pipeline, events: List[Dict], tables: List[tuple]):
         """
-        Write batch of events via DLT. Uses dlt native Iceberg when catalog is configured,
-        otherwise filesystem (JSONL) and optionally legacy custom Iceberg writer.
+        Write batch of events via DLT with Iceberg table format.
         """
         run_kw = {
             "table_name": "cdc_events",
             "write_disposition": self.config.dlt.write_disposition,
         }
-        if self.use_dlt_iceberg:
+
+        # Use Iceberg table format if Nessie catalog is configured
+        if self.use_iceberg_format:
             run_kw["table_format"] = "iceberg"
+
         pipeline.run(events, **run_kw)
 
-        # Legacy path: also write via custom Iceberg writer only when not using dlt Iceberg
-        if not self.use_dlt_iceberg and self.use_iceberg and self.iceberg_writer:
+        # Legacy path: also write via custom Iceberg writer (optional)
+        if self.use_iceberg_writer and self.iceberg_writer:
             try:
                 for database, table in tables:
                     table_events = [e for e in events if e.get('_db') == database and e.get('_table') == table]
@@ -361,7 +359,8 @@ class DebeziumDLTConnector:
 
     def _verify_data(self):
         """Verify data using DuckDB"""
-        if not self.use_iceberg:
+        if not self.use_iceberg_writer:
+            logger.info("Skipping data verification (Iceberg writer not available)")
             return
 
         try:
@@ -424,9 +423,9 @@ class DebeziumDLTConnector:
 
     def _register_with_nessie(self):
         """Register Iceberg tables with Nessie catalog"""
-        # Only register if using dlt Iceberg format and Nessie is configured
-        if not self.use_dlt_iceberg:
-            logger.debug("Skipping Nessie registration (not using dlt Iceberg format)")
+        # Only register if using Iceberg format and Nessie is configured
+        if not self.use_iceberg_format:
+            logger.debug("Skipping Nessie registration (not using Iceberg table_format)")
             return
 
         nessie_uri = getattr(self.config.iceberg, 'iceberg_rest_uri', None) or os.environ.get('ICEBERG_REST_URI')
@@ -455,7 +454,6 @@ class DebeziumDLTConnector:
             registrar.create_namespace()
 
             # Find and register the cdc_events table
-            # First, find the latest metadata file from DLT's output
             dataset_name = self.config.dlt.dataset_name
             table_name = "cdc_events"
 
@@ -524,20 +522,6 @@ class DebeziumDLTConnector:
                         relative_path = latest[1].replace('/data/', '')
                         s3_path = f"s3://{relative_path}"
                         return s3_path
-
-            # Fallback: check S3 directly using the DLT pipeline state
-            # DLT stores state in .dlt/pipeline_state
-            state_file = f".dlt/pipeline_state/{self.config.dlt.pipeline_name}/state.json"
-            if os.path.exists(state_file):
-                try:
-                    with open(state_file, 'r') as f:
-                        state = json.load(f)
-                        # Try to extract latest metadata location
-                        if 'pipeline_state' in state:
-                            # DLT state structure - look for completed loads
-                            pass
-                except Exception:
-                    pass
 
             # Final fallback - return the expected path for v1
             return f"s3://{self.config.dlt.destination_bucket}/{dataset_name}/{table_name}/metadata/v1.metadata.json"

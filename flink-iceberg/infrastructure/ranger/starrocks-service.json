@@ -1,96 +1,32 @@
 {
   "name": "starrocks",
-  "displayName": "StarRocks Service",
+  "displayName": "StarRocks",
   "implClass": "org.apache.ranger.services.starrocks.RangerServiceStarRocks",
   "properties": [
     {
-      "name": "starrocks.jdbc.url",
-      "displayName": "StarRocks JDBC URL",
-      "value": "jdbc:mysql://starrocks-fe:9030",
-      "description": "JDBC URL for StarRocks FE",
-      "isRequired": true
+      "name": "ranger.plugin.starrocks.service.name",
+      "label": "Service Name",
+      "defaultValue": "starrocksDev",
+      "description": "Name of the StarRocks service"
     },
     {
-      "name": "starrocks.jdbc.driver",
-      "displayName": "JDBC Driver",
-      "value": "com.mysql.cj.jdbc.Driver",
-      "description": "MySQL JDBC Driver (StarRocks uses MySQL protocol)",
-      "isRequired": true
+      "name": "ranger.plugin.starrocks.fe.url",
+      "label": "StarRocks FE URL",
+      "defaultValue": "starrocks-fe:9030",
+      "description": "StarRocks Frontend URL"
     },
     {
       "name": "username",
-      "displayName": "Username",
-      "value": "root",
-      "description": "Admin username for StarRocks",
-      "isRequired": true
+      "label": "Username",
+      "defaultValue": "root",
+      "description": "StarRocks admin username"
     },
     {
       "name": "password",
-      "displayName": "Password",
-      "value": "",
-      "isPassword": true,
-      "description": "Password for StarRocks admin user",
-      "isRequired": true
+      "label": "Password",
+      "defaultValue": "",
+      "description": "StarRocks admin password",
+      "isPassword": true
     }
-  ],
-  "resources": [
-    {
-      "itemId": 1,
-      "name": "database",
-      "type": "string",
-      "level": 10,
-      "parent": "",
-      "mandatory": true,
-      "lookupSupported": true,
-      "recursiveSupported": false,
-      "excludesSupported": true,
-      "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
-      "matcherOptions": { "wildCard": true, "ignoreCase": true },
-      "label": "Database",
-      "description": "StarRocks Database"
-    },
-    {
-      "itemId": 2,
-      "name": "table",
-      "type": "string",
-      "level": 20,
-      "parent": "database",
-      "mandatory": true,
-      "lookupSupported": true,
-      "recursiveSupported": true,
-      "excludesSupported": true,
-      "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
-      "matcherOptions": { "wildCard": true, "ignoreCase": true },
-      "label": "Table",
-      "description": "StarRocks Table"
-    },
-    {
-      "itemId": 3,
-      "name": "column",
-      "type": "string",
-      "level": 30,
-      "parent": "table",
-      "mandatory": false,
-      "lookupSupported": true,
-      "recursiveSupported": true,
-      "excludesSupported": true,
-      "matcher": "org.apache.ranger.plugin.resourcematcher.RangerDefaultResourceMatcher",
-      "matcherOptions": { "wildCard": true, "ignoreCase": true },
-      "label": "Column",
-      "description": "StarRocks Column"
-    }
-  ],
-  "accessTypes": [
-    { "itemId": 1, "name": "SELECT", "label": "Select" },
-    { "itemId": 2, "name": "INSERT", "label": "Insert" },
-    { "itemId": 3, "name": "UPDATE", "label": "Update" },
-    { "itemId": 4, "name": "DELETE", "label": "Delete" },
-    { "itemId": 5, "name": "CREATE", "label": "Create" },
-    { "itemId": 6, "name": "DROP", "label": "Drop" },
-    { "itemId": 7, "name": "ALTER", "label": "Alter" },
-    { "itemId": 8, "name": "ADMIN", "label": "Admin" }
-  ],
-  "policyConditions": [],
-  "contextEnrichers": [],
-  "enums": []
+  ]
 }

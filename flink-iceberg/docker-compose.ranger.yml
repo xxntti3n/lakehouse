@@ -1,5 +1,3 @@
-version: '3.8'
-
 # ====================================================================
 # StarRocks + Apache Ranger Docker Compose Stack
 # ====================================================================
@@ -51,7 +49,10 @@ services:
   # Apache Ranger Admin
   # ====================================================================
   ranger-admin:
-    image: apacheranger/ranger:2.5.0
+    build:
+      context: ./infrastructure/ranger
+      dockerfile: Dockerfile
+    image: apache/ranger:local
     container_name: ranger-admin
     environment:
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk

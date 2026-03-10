@@ -5,7 +5,7 @@ WORKDIR /app
 # Single layer: system deps + Python deps (fewer layers = less Colima/containerd lease errors)
 COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ pkg-config default-libmysqlclient-dev \
+    gcc g++ pkg-config default-libmysqlclient-dev curl \
     && pip install --no-cache-dir -r requirements.txt pymysql cryptography \
     && rm -rf /var/lib/apt/lists/* /root/.cache/pip
 
@@ -17,7 +17,7 @@ COPY random_data_generator.py .
 COPY debezium_dlt/ /app/debezium_dlt/
 
 # Set environment variables
-ENV MYSQL_HOST=mysql-source
+ENV MYSQL_HOST=mysql
 ENV MYSQL_PORT=3306
 ENV MYSQL_USER=root
 ENV MYSQL_PASSWORD=rootpw

@@ -1,13 +1,13 @@
-# DLT with Iceberg support
-dlt[all]>=0.5.0
+# DLT with filesystem destination and pyiceberg support - updated to 1.23.0
+dlt[filesystem]==1.23.0
 
 # Database drivers
 sqlalchemy>=2.0.18
 pymysql>=1.1.0
 mysql-replication>=0.9.1
 
-# Iceberg dependencies
-pyiceberg[s3]>=0.6.0
+# Iceberg dependencies for writing data
+pyiceberg[s3,pyarrow]>=0.6.0
 pyarrow>=14.0.0
 s3fs>=2023.0.0
 
@@ -17,3 +17,6 @@ duckdb>=0.9.0
 # CDC and utilities
 urllib3>=1.26.0
 requests>=2.31.0
+
+# Additional dependencies for dlt 1.23.0
+protobuf>=4.0.0

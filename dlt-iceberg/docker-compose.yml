@@ -1,7 +1,8 @@
 # Minimal by default: mysql + minio + nessie + cdc + data-generator (~1.5GB RAM).
 # Add StarRocks: --profile analytics
 # Add DuckDB UI: --profile duckdb
-# Full stack: --profile analytics
+# Add multi-GTID testing: --profile multi-gtid
+# Full stack: --profile analytics --profile multi-gtid
 #
 # NOTE: Nessie is now enabled by default for native Iceberg format support
 services:
@@ -34,7 +35,7 @@ services:
         limits: { memory: 256M }
         reservations: { memory: 64M }
 
-  # MySQL - Source (minimal)
+  # MySQL - Primary Source (server_id=1, GTID source 1)
   mysql:
     image: mysql:8.0
     container_name: mysql-source
@@ -46,8 +47,9 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./infrastructure/my.cnf:/etc/mysql/conf.d/gtid.cnf
+      - ./infrastructure/set-server-id.sh:/docker-entrypoint-initdb.d/02-set-server-id.sh
     command: --default-authentication-plugin=mysql_native_password
     networks:
       - lakehouse
@@ -61,6 +63,66 @@ services:
         limits: { memory: 512M }
         reservations: { memory: 128M }
 
+  # MySQL 2 - Secondary Source for multi-GTID testing (server_id=2, GTID source 2)
+  mysql2:
+    image: mysql:8.0
+    container_name: mysql-source-2
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql2_data:/var/lib/mysql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./infrastructure/my2.cnf:/etc/mysql/conf.d/gtid.cnf
+      - ./infrastructure/set-server-id-2.sh:/docker-entrypoint-initdb.d/02-set-server-id.sh
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 512M }
+        reservations: { memory: 128M }
+    profiles:
+      - multi-gtid
+
+  # MySQL 3 - Tertiary Source for multi-GTID testing (server_id=3, GTID source 3)
+  mysql3:
+    image: mysql:8.0
+    container_name: mysql-source-3
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql3_data:/var/lib/mysql
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./infrastructure/my3.cnf:/etc/mysql/conf.d/gtid.cnf
+      - ./infrastructure/set-server-id-3.sh:/docker-entrypoint-initdb.d/02-set-server-id.sh
+    command: --default-authentication-plugin=mysql_native_password
+    networks:
+      - lakehouse
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpw"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { memory: 512M }
+        reservations: { memory: 128M }
+    profiles:
+      - multi-gtid
+
   # MinIO - S3 storage (minimal)
   minio:
     image: minio/minio:latest
@@ -68,8 +130,8 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9002:9000"
+      - "9003:9001"
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
@@ -98,7 +160,7 @@ services:
     ports:
       - "8501:8501"
     environment:
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: http://minio:9002
       S3_ACCESS_KEY: minio
       S3_SECRET_KEY: minio123
       S3_BUCKET: dlt-warehouse
@@ -159,18 +221,19 @@ services:
       MYSQL_DATABASE: appdb
 
       # S3/MinIO configuration
-      S3_ENDPOINT_URL: http://minio:9000
+      S3_ENDPOINT_URL: http://minio:9002
       S3_ACCESS_KEY: minio
       S3_SECRET_KEY: minio123
       AWS_REGION: us-east-1
 
-      # Nessie/Iceberg configuration
+      # Iceberg/Iceberg configuration
       NESSIE_URI: http://nessie:19120/api/v2
       NESSIE_REF: main
       NESSIE_ICEBERG_URI: http://nessie:19120/iceberg
       ICEBERG_WAREHOUSE: s3://dlt-warehouse/iceberg
       ICEBERG_NAMESPACE: appdb
       ICEBERG_REST_URI: http://nessie:19120/iceberg/v1
+      CHECKPOINT_ENDPOINT_URL: http://minio:9000
 
       # Pipeline configuration
       SNAPSHOT_MODE: initial
@@ -198,6 +261,76 @@ services:
       resources:
         limits: { memory: 512M }
         reservations: { memory: 256M }
+
+  # Debezium DLT Connector 2 - for multi-GTID testing (connects to mysql2)
+  debezium-cdc-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.pipeline
+    image: mysql-iceberg-pipeline
+    container_name: debezium-dlt-connector-2
+    restart: unless-stopped
+    command: >
+      sh -c "
+      echo 'Starting Debezium DLT Connector 2 - MySQL2 (server_id=2)' &&
+      echo 'This connector will only process GTIDs from mysql2' &&
+      echo '' &&
+      while true; do
+        echo '===== CDC Run 2 at '$$(date)' =====' &&
+        python run_debezium_dlt.py &&
+        EXIT_CODE=$$? &&
+        if [ $$EXIT_CODE -eq 0 ]; then
+          echo '✅ CDC run 2 completed successfully. Next run in 5 minutes...' &&
+          sleep 300
+        else
+          echo '❌ CDC run 2 failed with code '$$EXIT_CODE'. Retrying in 1 minute...' &&
+          sleep 60
+        fi
+      done
+      "
+    environment:
+      # MySQL 2 configuration
+      MYSQL_HOST: mysql2
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: rootpw
+      MYSQL_DATABASE: appdb
+
+      # S3/MinIO configuration
+      S3_ENDPOINT_URL: http://minio:9002
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio123
+      AWS_REGION: us-east-1
+
+      # Nessie/Iceberg configuration
+      NESSIE_URI: http://nessie:19120/api/v2
+      NESSIE_REF: main
+      ICEBERG_REST_URI: http://nessie:19120/iceberg/v1
+
+      # Pipeline configuration - different dataset name
+      SNAPSHOT_MODE: initial
+      STREAMING_BATCH_SIZE: 1000
+      DEST_BUCKET: dlt-warehouse
+      DATASET_NAME: debezium_cdc_mysql2
+    volumes:
+      - ./run_debezium_dlt.py:/app/run_debezium_dlt.py:ro
+      - ./debezium_dlt:/app/debezium_dlt:ro
+      - pipeline_logs:/logs
+    networks:
+      - lakehouse
+    depends_on:
+      mysql2:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      nessie:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { memory: 512M }
+        reservations: { memory: 256M }
+    profiles:
+      - multi-gtid
 
   # Data generator (optional for minimal; leave in for demo)
   data-generator:
@@ -348,6 +481,8 @@ services:
 
 volumes:
   mysql_data:
+  mysql2_data:
+  mysql3_data:
   minio_data:
   pipeline_logs:
   starrocks_fe_data:

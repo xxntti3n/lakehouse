@@ -104,7 +104,7 @@ class DebeziumConfig:
             ),
             iceberg=IcebergConfig(
                 checkpoint_bucket=os.getenv('CHECKPOINT_BUCKET', 'dlt-checkpoints'),
-                endpoint_url=os.getenv('S3_ENDPOINT_URL', 'http://minio:9000'),
+                endpoint_url=os.getenv('CHECKPOINT_ENDPOINT_URL', os.getenv('S3_ENDPOINT_URL', 'http://minio:9002')),
                 access_key=os.getenv('S3_ACCESS_KEY', 'minio'),
                 secret_key=os.getenv('S3_SECRET_KEY', 'minio123'),
                 nessie_uri=os.getenv('NESSIE_URI') or None,
