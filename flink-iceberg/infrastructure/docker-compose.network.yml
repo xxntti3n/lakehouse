@@ -1,0 +1,6 @@
+name: lakehouse
+
+networks:
+  lakehouse_network:
+    driver: bridge
+    name: lakehouse_network
