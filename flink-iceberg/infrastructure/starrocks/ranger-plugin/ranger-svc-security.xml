@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Ranger Security Configuration for StarRocks Plugin
+
+  SECURITY WARNING: This configuration contains plaintext credentials for
+  development/demo purposes only. For production deployment, use Ranger's
+  credential encryption (jceks) or environment variables to protect sensitive data.
+-->
+<configuration>
+  <!-- Ranger Service Name -->
+  <property>
+    <name>ranger.service.name</name>
+    <value>starrocks</value>
+    <description>Name of the StarRocks service in Ranger Admin</description>
+  </property>
+
+  <!-- Ranger Admin URL -->
+  <property>
+    <name>ranger.policy.rest.url</name>
+    <value>http://ranger-admin:6080</value>
+    <description>URL of Ranger Admin service</description>
+  </property>
+
+  <!-- Authentication -->
+  <property>
+    <name>ranger.auth.method</name>
+    <value>simple</value>
+    <description>Authentication method (simple or kerberos)</description>
+  </property>
+
+  <property>
+    <name>ranger.admin.username</name>
+    <value>admin</value>
+    <description>Ranger admin username</description>
+  </property>
+
+  <property>
+    <name>ranger.admin.password</name>
+    <value>rangerR0cks!</value>
+    <description>Ranger admin password (encrypted at runtime)</description>
+  </property>
+
+  <!-- Policy Cache -->
+  <property>
+    <name>ranger.plugin.starrocks.policy.cache.dir</name>
+    <value>/var/log/ranger/starrocks/policycache</value>
+    <description>Directory for caching policies</description>
+  </property>
+
+  <property>
+    <name>ranger.plugin.starrocks.policy.pollIntervalMs</name>
+    <value>30000</value>
+    <description>Interval in milliseconds to poll for policy updates</description>
+  </property>
+
+  <!-- Audit Configuration -->
+  <property>
+    <name>ranger.plugin.starrocks.audit.enabled</name>
+    <value>true</value>
+    <description>Enable audit logging</description>
+  </property>
+
+  <property>
+    <name>ranger.plugin.starrocks.audit.solr.enabled</name>
+    <value>false</value>
+    <description>Enable Solr for audit logs</description>
+  </property>
+
+  <property>
+    <name>ranger.plugin.starrocks.audit.logfile.enabled</name>
+    <value>true</value>
+    <description>Enable file-based audit logging</description>
+  </property>
+
+  <property>
+    <name>ranger.plugin.starrocks.audit.logfile.dir</name>
+    <value>/var/log/ranger/starrocks/audit</value>
+    <description>Directory for audit log files</description>
+  </property>
+</configuration>
